@@ -41,6 +41,10 @@ nav{flex:0 0 auto;background:#fff;border-top:1px solid #d6dde6}
 .row label.sun{gap:8px}
 .row label.sun input{width:130px;accent-color:var(--gold)}
 .sep{flex:0 0 1px;background:#d6dde6;margin:2px 3px}
+#lab{pointer-events:none;z-index:3}
+#pop{position:absolute;z-index:8;display:none;background:#fff;border:1px solid #cfd8e2;border-left:4px solid var(--gold);border-radius:10px;box-shadow:0 6px 20px rgba(11,37,69,.22);padding:9px 12px;font-size:13px;line-height:1.5;max-width:250px;pointer-events:auto}
+#pop b{font-size:15px}#pop .k{color:var(--grey)}#pop table{border-collapse:collapse;margin-top:3px}#pop td{padding:1px 8px 1px 0}#pop td+td{font-weight:700;text-align:right;padding-right:0}
+#fl{position:absolute;left:12px;top:44px;background:rgba(11,37,69,.88);color:#fff;border-radius:8px;padding:5px 10px;font-size:12.5px;font-weight:600;pointer-events:none;display:none}
 footer{flex:0 0 auto;background:var(--light);color:var(--grey);font-size:11px;padding:4px 12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 </style>
 </head>
@@ -48,7 +52,7 @@ footer{flex:0 0 auto;background:var(--light);color:var(--grey);font-size:11px;pa
 <div id="app">
   <header><div class="t">KARMAYOG INTERNATIONAL BUSINESS HUB</div><div style="display:flex;align-items:center;gap:10px"><div id="who"><span id="whoMail"></span><button id="whoOut">Sign out</button></div><div class="chip">3D VIEW</div></div></header>
   <div id="stage">
-    <canvas id="c" tabindex="0"></canvas>
+    <canvas id="c" tabindex="0"></canvas><canvas id="lab"></canvas><div id="fl"></div><div id="pop"></div>
     <div id="face"></div>
     <div id="tools">
       <button id="zin" title="Zoom in">+</button>
@@ -67,6 +71,14 @@ footer{flex:0 0 auto;background:var(--light);color:var(--grey);font-size:11px;pa
     </div></div>
   </div>
   <nav>
+    <div class="row" id="floors"></div>
+    <div class="row" id="popts" style="display:none">
+      <button id="pTop">Plan view</button><button id="p3d">3D plan</button><span class="sep"></span>
+      <label class="tg"><input type="checkbox" id="oLabels" checked>Numbers</label>
+      <label class="tg"><input type="checkbox" id="oFit">Fit-out</label>
+      <label class="tg"><input type="checkbox" id="oFurn">Furniture</label>
+      <label class="tg"><input type="checkbox" id="oAct">Activity</label>
+    </div>
     <div class="row" id="views"></div>
     <div class="row" id="opts">
       <label class="tg"><input type="checkbox" id="oPeople" checked>People</label>
@@ -139,26 +151,26 @@ function prog(vs, fs){const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_
 
 const VS_SHADOW = `#version 300 es
 layout(location=0) in vec3 aPos; layout(location=2) in vec4 aCol;
-uniform mat4 uLVP; uniform int uHide;
-void main(){ int code=int(aCol.a*255.0+0.5); int cat=code>>4;
+uniform mat4 uLVP; uniform int uHide; out float vZ;
+void main(){ vZ=aPos.z; int code=int(aCol.a*255.0+0.5); int cat=code>>4;
   if(((uHide>>cat)&1)==1){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
   gl_Position=uLVP*vec4(aPos,1.0); }`;
 const FS_SHADOW = `#version 300 es
-precision highp float; void main(){}`;
+precision highp float; in float vZ; uniform float uClip; void main(){ if(vZ>uClip) discard; }`;
 
 const VS_SCENE = `#version 300 es
 layout(location=0) in vec3 aPos; layout(location=1) in vec3 aNor; layout(location=2) in vec4 aCol; layout(location=3) in float aId;
-uniform mat4 uVP; uniform int uHide;
+uniform mat4 uVP; uniform int uHide; uniform float uIdOff;
 out vec3 vPos; out vec3 vNor; out vec3 vCol; flat out int vMat; flat out float vId;
 void main(){ int code=int(aCol.a*255.0+0.5); int cat=code>>4;
   if(((uHide>>cat)&1)==1){ gl_Position=vec4(2.0,2.0,2.0,1.0); return; }
-  vPos=aPos; vNor=aNor; vCol=aCol.rgb; vMat=code&15; vId=aId; gl_Position=uVP*vec4(aPos,1.0); }`;
+  vPos=aPos; vNor=aNor; vCol=aCol.rgb; vMat=code&15; vId=aId+uIdOff; gl_Position=uVP*vec4(aPos,1.0); }`;
 
 const FS_SCENE = `#version 300 es
 precision highp float; precision highp sampler2DShadow;
 in vec3 vPos; in vec3 vNor; in vec3 vCol; flat in int vMat; flat in float vId;
 uniform vec3 uEye; uniform vec3 uSun; uniform mat4 uLVP; uniform sampler2DShadow uShadow;
-uniform float uDusk; uniform int uShadowOn; uniform float uBias; uniform float uTexel; uniform vec3 uHor; uniform vec3 uTop; uniform float uAlpha;
+uniform float uClip; uniform float uSel; uniform float uDusk; uniform int uShadowOn; uniform float uBias; uniform float uTexel; uniform vec3 uHor; uniform vec3 uTop; uniform float uAlpha;
 layout(location=0) out vec4 oCol; layout(location=1) out vec4 oId;
 float shadowVis(vec3 N){
   vec4 lp=uLVP*vec4(vPos+N*0.25,1.0); vec3 q=lp.xyz*0.5+0.5;
@@ -168,6 +180,7 @@ float shadowVis(vec3 N){
   s+=texture(uShadow,vec3(q.xy+vec2(-t,t),d));  s+=texture(uShadow,vec3(q.xy+vec2(t,t),d));
   return s*0.25; }
 void main(){
+  if(vPos.z>uClip) discard;
   vec3 N=normalize(vNor); vec3 V=uEye-vPos; float dist=length(V); V/=max(dist,1e-4);
   bool flipped=dot(N,V)<0.0; if(flipped) N=-N;
   vec3 col;
@@ -189,6 +202,7 @@ void main(){
     }
   }
   float a=1.0-exp(-dist/2600.0); col=mix(col,uHor,a);
+  if(abs(vId-uSel)<0.5) col=mix(col,vec3(1.0,0.78,0.15),0.42);
   oCol=vec4(col*uAlpha,uAlpha);
   float id=vId; oId=vec4(mod(id,256.0),mod(floor(id/256.0),256.0),floor(id/65536.0),255.0)/255.0;
 }`;
@@ -267,12 +281,14 @@ function fromEyeTarget(e,t,fov){const d=V3.sub(e,t),L=V3.len(d);return {t:t.slic
 function eyeOf(c){const cp=Math.cos(c.pitch);return [c.t[0]+c.dist*cp*Math.cos(c.yaw), c.t[1]+c.dist*cp*Math.sin(c.yaw), c.t[2]+c.dist*Math.sin(c.pitch)];}
 function constrain(){
   cam.dist = clamp(cam.dist, 6, 3200);
-  cam.t[0]=clamp(cam.t[0],-1600,1600); cam.t[1]=clamp(cam.t[1],-1600,1600); cam.t[2]=clamp(cam.t[2],0,220);
+  cam.t[0]=clamp(cam.t[0],-1600,1600); cam.t[1]=clamp(cam.t[1],-1600,1600); cam.t[2]=clamp(cam.t[2],-40,220);
+  if (PL.cur){ cam.pitch = clamp(cam.pitch, 6*D2R, 89.5*D2R); return; }
   const pmin = Math.asin(clamp((2.0-cam.t[2])/cam.dist,-1,1));
   cam.pitch = clamp(cam.pitch, Math.max(pmin,-0.9), 89.5*D2R);
 }
 let anim=null;
 function goView(i, ms=850){
+  if (PL.cur && !goView._int){ PL.cur=null; PL.sel=0; floorButtons(); $('popts').style.display='none'; $('fl').style.display='none'; hidePop(); }
   const v=VIEWS[i], to=fromEyeTarget(v[1],v[2],v[3]);
   let dy=to.yaw-cam.yaw; dy=((dy+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
   anim={from:{t:cam.t.slice(),yaw:cam.yaw,pitch:cam.pitch,dist:cam.dist,fov:cam.fov}, to:{...to,yaw:cam.yaw+dy}, t0:performance.now(), ms};
@@ -293,8 +309,94 @@ function stepAnim(now){
 function clearOn(){ document.querySelectorAll('#views button.on').forEach(b=>b.classList.remove('on')); }
 
 // ---------------------------------------------------------------- state / options
-const opt = {people:true, cars:true, shadow:true, lines:true, dusk:false, spin:false, sun:25};
-function hideMask(){ return (opt.people?0:2) | (opt.cars?0:4); }
+const opt = {people:true, cars:true, shadow:true, lines:true, dusk:false, spin:false, sun:25, labels:true, fit:false, furn:false, act:false};
+function hideMask(){ return (opt.people?0:2) | (opt.cars?0:4) | (opt.fit?0:16) | (opt.furn?0:32) | (opt.act?0:64); }
+// ---------------------------------------------------------------- floor-plan 3D (dollhouse cut-away)
+const LVZ=[2,16,27,38,49,60,71,82];                       // floor levels (ft)
+const FLOORS=[['Exterior',null],['B3','B3'],['B2','B2'],['B1','B1'],['Ground','G'],['1st','1'],['2nd','2'],['3rd','3'],['4th','4'],['5th','5'],['6th','6'],['Terrace','T']];
+const PL={meta:null, cache:{}, cur:null, sel:0, busy:false};
+function clipOf(k){ return k==='T'?82.05 : k==='G'?LVZ[1]-0.8 : LVZ[+k+1]-0.8; }
+function mkVao(buf){ const v=gl.createVertexArray(); gl.bindVertexArray(v); const vb=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,vb); gl.bufferData(gl.ARRAY_BUFFER,buf,gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0,3,gl.FLOAT,false,24,0); gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1,3,gl.BYTE,true,24,12);
+  gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2,4,gl.UNSIGNED_BYTE,true,24,16); gl.enableVertexAttribArray(3); gl.vertexAttribPointer(3,1,gl.FLOAT,false,24,20); gl.bindVertexArray(null); return v; }
+async function ensureFloor(key){
+  if (PL.cache[key]) return PL.cache[key];
+  if (!PL.meta) { const arr = await window.btPlanMeta(); PL.meta = {}; arr.forEach(h=>PL.meta[h.key]=h); }
+  const h = PL.meta[key]; if (!h) throw new Error('floor not uploaded');
+  const buf = b64buf(await window.btPlanFetch(key, h.parts));
+  if (buf.byteLength !== h.verts*24) throw new Error('floor size mismatch');
+  const n=h.verts, f32=new Float32Array(buf), u8=new Uint8Array(buf), pos=new Float32Array(n*3), code=new Uint8Array(n/3), gid=new Float32Array(n/3);
+  for (let v=0; v<n; v++){ pos[v*3]=f32[v*6]; pos[v*3+1]=f32[v*6+1]; pos[v*3+2]=f32[v*6+2]; }
+  for (let t=0; t<n/3; t++){ code[t]=u8[t*72+19]; gid[t]=f32[t*18+5]; }
+  return PL.cache[key] = {key, head:h, vao:mkVao(buf), n, pos, code, gid, units:h.units, labels:h.labels, z0:h.z0, clip:clipOf(key), basement:key[0]==='B', idOff:100000};
+}
+function floorButtons(){ document.querySelectorAll('#floors button').forEach((b,i)=>b.classList.toggle('on',i===PL.sel)); }
+async function selectFloor(i){
+  if (PL.busy) return; const key = FLOORS[i][1]; hidePop();
+  if (key===null){ PL.sel=0; PL.cur=null; floorButtons(); $('popts').style.display='none'; $('fl').style.display='none'; goView(0); req(); return; }
+  PL.busy=true; msg('Loading floor plan…');
+  try{
+    const f = await ensureFloor(key); msg('');
+    const first = !PL.cur; PL.cur=f; PL.sel=i; floorButtons(); $('popts').style.display='flex';
+    $('fl').textContent=f.head.name+' · Plan'; $('fl').style.display='block'; clearOn();
+    if (first || cam.dist>700) planView3d(f); else flyTo([cam.t[0],cam.t[1],f.z0], cam.dist, 500);
+    req();
+  }catch(err){ msg('Floor plan could not load: '+(err.message||err)); setTimeout(()=>msg(''),3500); }
+  PL.busy=false;
+}
+function planView3d(f){ const z=f.z0; const s=fromEyeTarget([150,-360,z+270],[0,-10,z],50); anim={from:{t:cam.t.slice(),yaw:cam.yaw,pitch:cam.pitch,dist:cam.dist,fov:cam.fov}, to:{...s,yaw:s.yaw}, t0:performance.now(), ms:900}; req(); }
+function planViewTop(f){ const z=f.z0; const s=fromEyeTarget([0.01,-10-0.5,z+640],[0,-10,z],40); s.yaw=-Math.PI/2; s.pitch=89.4*D2R;
+  let dy=s.yaw-cam.yaw; dy=((dy+Math.PI)%(2*Math.PI)+2*Math.PI)%(2*Math.PI)-Math.PI;
+  anim={from:{t:cam.t.slice(),yaw:cam.yaw,pitch:cam.pitch,dist:cam.dist,fov:cam.fov}, to:{...s,yaw:cam.yaw+dy}, t0:performance.now(), ms:900}; req(); }
+// ---- number labels (2D overlay) + tap popup
+const labC=$('lab'), lctx=labC.getContext('2d');
+function drawLabels(){
+  const r=canvas.getBoundingClientRect(), dpr=window.devicePixelRatio||1, W=Math.round(r.width*dpr), H=Math.round(r.height*dpr);
+  if(labC.width!==W||labC.height!==H){ labC.width=W; labC.height=H; }
+  lctx.setTransform(1,0,0,1,0,0); lctx.clearRect(0,0,W,H);
+  const f=PL.cur; if(!f||!opt.labels||!lastVP) return;
+  lctx.setTransform(dpr,0,0,dpr,0,0); lctx.textAlign='center'; lctx.textBaseline='middle'; lctx.lineJoin='round';
+  const VP=lastVP, th=Math.tan(vfov()/2), Hh=r.height, Ww=r.width;
+  for (const L of f.labels){
+    const [txt,x,y,z,kind,size]=L;
+    const cx=VP[0]*x+VP[4]*y+VP[8]*z+VP[12], cy=VP[1]*x+VP[5]*y+VP[9]*z+VP[13], w=VP[3]*x+VP[7]*y+VP[11]*z+VP[15];
+    if (w<=0.5) continue; const sx=(cx/w*0.5+0.5)*Ww, sy=(1-(cy/w*0.5+0.5))*Hh;
+    if (sx<-60||sx>Ww+60||sy<-30||sy>Hh+30) continue;
+    const ft = kind==='u'?2.1*size : kind==='b'?1.3*size : 1.5*size;
+    let px = ft*Hh/(2*w*th); if (px<(kind==='b'?9:7)) continue; px=Math.min(px,34);
+    lctx.font=(kind==='f'?'600 ':'700 ')+px.toFixed(1)+'px system-ui,Segoe UI,Roboto,sans-serif';
+    lctx.lineWidth=Math.max(2,px*0.22); lctx.strokeStyle='rgba(255,255,255,.92)'; lctx.strokeText(txt,sx,sy);
+    lctx.fillStyle = kind==='u' ? '#0B2545' : kind==='b' ? '#2b3a4f' : '#5B6675'; lctx.fillText(txt,sx,sy);
+  }
+}
+const popEl=$('pop'); let popSel=-1;
+function hidePop(){ popEl.style.display='none'; popSel=-1; if(PL.cur) req(); }
+const fmtN=v=>Number(v).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function showPop(gid,cx,cy){
+  const f=PL.cur; const u=f&&f.units[gid]; if(!u){ hidePop(); return; }
+  let h='<b>'+esc(u.no)+'</b>'; const sub=[u.type,u.loc].filter(x=>x&&x!==u.no).join(' · '); if(sub) h+='<br><span class="k">'+esc(sub)+'</span>';
+  h+='<table>'; if(u.size) h+='<tr><td class="k">Size</td><td>'+esc(u.size)+'</td></tr>';
+  if(u.carpet!=null){ h+='<tr><td class="k">Carpet area</td><td>'+fmtN(u.carpet)+' sq ft</td></tr><tr><td class="k">Super built-up</td><td>'+fmtN(u.sup)+' sq ft</td></tr>'; }
+  h+='</table>'; if(u.note) h+='<span class="k">'+esc(u.note)+'</span>';
+  popEl.innerHTML=h; popEl.style.display='block'; popSel=f.idOff+gid;
+  const r=$('stage').getBoundingClientRect(); let x=cx-r.left+12, y=cy-r.top+12;
+  x=Math.min(x,r.width-popEl.offsetWidth-8); y=Math.min(y,r.height-popEl.offsetHeight-8); popEl.style.left=Math.max(6,x)+'px'; popEl.style.top=Math.max(6,y)+'px'; req();
+}
+function mkRay(cx,cy){ const r=canvas.getBoundingClientRect(); const nx=((cx-r.left)/r.width)*2-1, ny=1-((cy-r.top)/r.height)*2;
+  const th=Math.tan(vfov()/2), asp=r.width/r.height, B=lastBasis;
+  return {o:lastEye, d:V3.norm(V3.add(V3.add(B.f,V3.mul(B.r,nx*th*asp)),V3.mul(B.u,ny*th)))}; }
+function rayTri(o,d,P,i){
+  const ax=P[i],ay=P[i+1],az=P[i+2], e1x=P[i+3]-ax,e1y=P[i+4]-ay,e1z=P[i+5]-az, e2x=P[i+6]-ax,e2y=P[i+7]-ay,e2z=P[i+8]-az;
+  const px=d[1]*e2z-d[2]*e2y, py=d[2]*e2x-d[0]*e2z, pz=d[0]*e2y-d[1]*e2x, det=e1x*px+e1y*py+e1z*pz; if(Math.abs(det)<1e-9) return -1; const inv=1/det;
+  const sx=o[0]-ax, sy=o[1]-ay, sz=o[2]-az, u=(sx*px+sy*py+sz*pz)*inv; if(u<0||u>1) return -1;
+  const qx=sy*e1z-sz*e1y, qy=sz*e1x-sx*e1z, qz=sx*e1y-sy*e1x, v=(d[0]*qx+d[1]*qy+d[2]*qz)*inv; if(v<0||u+v>1) return -1;
+  return (e2x*qx+e2y*qy+e2z*qz)*inv; }
+function pickPlan(cx,cy){
+  const f=PL.cur; if(!f||!lastBasis) return null; const {o,d}=mkRay(cx,cy); let best=Infinity, bg=0; const hide=hideMask();
+  for (let t=0,n=f.n/3;t<n;t++){ if((hide>>(f.code[t]>>4))&1) continue; if(!f.units[f.gid[t]]) continue;
+    const tt=rayTri(o,d,f.pos,t*9); if(tt>0.3&&tt<best){ best=tt; bg=f.gid[t]; } }
+  return best<Infinity ? {pt:V3.add(o,V3.mul(d,best)), gid:bg} : null; }
 function sunDir(){
   if (opt.dusk){ const az=cam.yaw+opt.sun*D2R, el=24*D2R; return [Math.cos(el)*Math.cos(az),Math.cos(el)*Math.sin(az),Math.sin(el)]; }
   const az=cam.yaw+opt.sun*D2R, el=44*D2R; return [Math.cos(el)*Math.cos(az),Math.cos(el)*Math.sin(az),Math.sin(el)];
@@ -327,8 +429,9 @@ function draw(){
   lastVP=VP; lastEye=eye;
   const f=V3.norm(V3.sub(cam.t,eye)), rr=V3.norm(V3.cross(f,up)), uu=V3.cross(rr,f); lastBasis={f,r:rr,u:uu};
   const L=sunDir(), hide=hideMask();
-  const hor = opt.dusk?[236/255,168/255,120/255]:[226/255,234/255,240/255];
-  const top = opt.dusk?[38/255,62/255,112/255]:[128/255,170/255,214/255];
+  const planOnly = !!(PL.cur && PL.cur.basement), clipZ = PL.cur ? PL.cur.clip : 1e9;
+  const hor = planOnly?[233/255,238/255,243/255] : opt.dusk?[236/255,168/255,120/255]:[226/255,234/255,240/255];
+  const top = planOnly?[233/255,238/255,243/255] : opt.dusk?[38/255,62/255,112/255]:[128/255,170/255,214/255];
   // light matrix (ortho, centred on the orbit target)
   const ext=clamp(cam.dist*1.15,140,700), C=[clamp(cam.t[0],-900,900),clamp(cam.t[1],-900,900),30];
   const lpos=V3.add(C,V3.mul(L,1500)); const lup=Math.abs(L[2])>0.99?[0,1,0]:[0,0,1];
@@ -340,7 +443,8 @@ function draw(){
     gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFB); gl.viewport(0,0,SHR,SHR); gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT);
     gl.useProgram(P_SH.p); gl.uniformMatrix4fv(P_SH.u.uLVP,false,LVP); gl.uniform1i(P_SH.u.uHide,hide);
     gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(1.5,2.0);
-    gl.drawArrays(gl.TRIANGLES,0,nOpaqueV);
+    if(!planOnly){ gl.uniform1f(P_SH.u.uClip,clipZ); gl.drawArrays(gl.TRIANGLES,0,nOpaqueV); }
+    if(PL.cur){ gl.uniform1f(P_SH.u.uClip,1e9); gl.bindVertexArray(PL.cur.vao); gl.drawArrays(gl.TRIANGLES,0,PL.cur.n); gl.bindVertexArray(vao); }
     gl.disable(gl.POLYGON_OFFSET_FILL);
   }
   // 2) scene pass -> colour + id
@@ -354,9 +458,12 @@ function draw(){
   gl.uniform1f(U.uDusk,opt.dusk?1:0); gl.uniform1i(U.uShadowOn,opt.shadow?1:0);
   gl.uniform1f(U.uBias,0.5/3199); gl.uniform1f(U.uTexel,0.6/SHR);
   gl.uniform3fv(U.uHor,hor); gl.uniform3fv(U.uTop,top); gl.uniform1f(U.uAlpha,1.0);
-  gl.drawArrays(gl.TRIANGLES,0,nOpaqueV);
+  gl.uniform1f(U.uClip,clipZ); gl.uniform1f(U.uIdOff,0.0); gl.uniform1f(U.uSel,-1.0);
+  if(!planOnly) gl.drawArrays(gl.TRIANGLES,0,nOpaqueV);
+  if(PL.cur){ gl.uniform1f(U.uClip,1e9); gl.uniform1f(U.uIdOff,PL.cur.idOff); gl.uniform1f(U.uSel,popSel); gl.bindVertexArray(PL.cur.vao); gl.drawArrays(gl.TRIANGLES,0,PL.cur.n); gl.bindVertexArray(vao);
+    gl.uniform1f(U.uClip,clipZ); gl.uniform1f(U.uIdOff,0.0); gl.uniform1f(U.uSel,-1.0); }
   // transparent glass railings: colour only, no depth write, ids untouched
-  if (nVerts>nOpaqueV){
+  if (nVerts>nOpaqueV && !planOnly){
     gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.NONE]); gl.depthMask(false); gl.enable(gl.BLEND);
     gl.blendFuncSeparate(gl.ONE,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
     gl.uniform1f(U.uAlpha,0.45); gl.drawArrays(gl.TRIANGLES,nOpaqueV,nVerts-nOpaqueV);
@@ -371,7 +478,7 @@ function draw(){
   gl.drawArrays(gl.TRIANGLES,0,3);
   gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D,null); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D,null); gl.activeTexture(gl.TEXTURE0);
   gl.bindVertexArray(null);
-  updateFace();
+  updateFace(); drawLabels();
 }
 
 // ---------------------------------------------------------------- "view from" label
@@ -412,7 +519,7 @@ function panBy(dx,dy){
 function rotBy(dx,dy){ cam.yaw-=dx*0.0065; cam.pitch+=dy*0.0055; }
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
 canvas.addEventListener('pointerdown',e=>{
-  canvas.setPointerCapture(e.pointerId); anim=null; hideHelp();
+  canvas.setPointerCapture(e.pointerId); anim=null; hideHelp(); if(popEl.style.display!=='none') hidePop();
   drag.pts.set(e.pointerId,{x:e.clientX,y:e.clientY}); drag.active=true;
   if(drag.pts.size===1){ drag.mode=(e.button===2||e.button===1||e.shiftKey||e.ctrlKey)?'pan':'rot'; drag.downT=performance.now(); drag.downXY=[e.clientX,e.clientY]; drag.moved=0; }
   else { drag.mode='pinch'; drag.prevPinch=null; drag.moved=99; }
@@ -438,8 +545,10 @@ function endPtr(e){
     const now=performance.now();
     if(drag.mode!=='pinch' && drag.moved<10 && now-drag.downT<300){
       if(now-drag.lastTap<450 && Math.hypot(e.clientX-drag.lastTapXY[0],e.clientY-drag.lastTapXY[1])<35){
-        const hit=pick(e.clientX,e.clientY); if(hit) flyTo(hit, clamp(cam.dist*0.45,18,cam.dist)); drag.lastTap=0;
-      } else { drag.lastTap=now; drag.lastTapXY=[e.clientX,e.clientY]; }
+        clearTimeout(drag.pendT); let hit=null; if(PL.cur){ const q=pickPlan(e.clientX,e.clientY); if(q) hit=q.pt; } if(!hit && !(PL.cur&&PL.cur.basement)) hit=pick(e.clientX,e.clientY);
+        if(hit) flyTo(hit, clamp(cam.dist*0.45,18,cam.dist)); drag.lastTap=0;
+      } else { drag.lastTap=now; drag.lastTapXY=[e.clientX,e.clientY];
+        if(PL.cur){ const cx=e.clientX, cy=e.clientY; clearTimeout(drag.pendT); drag.pendT=setTimeout(()=>{ const q=pickPlan(cx,cy); if(q) showPop(q.gid,cx,cy); else hidePop(); },330); } }
     }
     drag.mode=null;
   } else if(drag.pts.size===1){ drag.mode='rot'; drag.prevPinch=null; }
@@ -458,12 +567,15 @@ function hideHelp(){ $('help').style.display='none'; }
 $('help').addEventListener('click',hideHelp);
 $('zin').onclick=()=>{ flyTo(cam.t.slice(), cam.dist*0.7, 300); clearOn(); };
 $('zout').onclick=()=>{ flyTo(cam.t.slice(), cam.dist/0.7, 300); clearOn(); };
-$('home').onclick=()=>goView(0);
+$('home').onclick=()=>{ if(PL.cur){ planView3d(PL.cur); } else goView(0); };
 $('fs').onclick=()=>{ try{ const d=document, el=$('app');
   if(!d.fullscreenElement){ const p=(el.requestFullscreen||el.webkitRequestFullscreen).call(el); if(p&&p.catch) p.catch(()=>{}); }
   else { const p=(d.exitFullscreen||d.webkitExitFullscreen).call(d); if(p&&p.catch) p.catch(()=>{}); } }catch(_){} };
 const bind=(id,key)=>{ $(id).addEventListener('change',e=>{ opt[key]=e.target.checked; req(); }); };
 bind('oPeople','people'); bind('oCars','cars'); bind('oShadow','shadow'); bind('oLines','lines'); bind('oDusk','dusk'); bind('oSpin','spin');
+bind('oLabels','labels'); bind('oFit','fit'); bind('oFurn','furn'); bind('oAct','act');
+$('pTop').onclick=()=>{ if(PL.cur) planViewTop(PL.cur); }; $('p3d').onclick=()=>{ if(PL.cur) planView3d(PL.cur); };
+FLOORS.forEach((v,i)=>{ const b=document.createElement('button'); b.textContent=v[0]; b.onclick=()=>selectFloor(i); $('floors').appendChild(b); }); floorButtons();
 $('oSun').addEventListener('input',e=>{ opt.sun=+e.target.value; req(); });
 VIEWS.forEach((v,i)=>{ const b=document.createElement('button'); b.textContent=v[0]; b.onclick=()=>goView(i); $('views').appendChild(b); });
 window.addEventListener('resize',resize);
@@ -511,6 +623,8 @@ onAuthStateChanged(auth, async user => {
       gm('3D લોડ થઈ રહ્યું છે… '+Math.round(100*i/meta.parts)+'%');
       const p = await getDoc(doc(db,'model','p'+i)); b64 += p.data().d;
     }
+    window.btPlanMeta = async () => { const d = await getDoc(doc(db,'model','plmeta')); if (!d.exists()) throw new Error('floor plans not uploaded yet'); return JSON.parse(d.data().j); };
+    window.btPlanFetch = async (key, parts) => { let s=''; for (let i=0;i<parts;i++){ const p = await getDoc(doc(db,'model','pl_'+key+'_'+i)); s += p.data().d; } return s; };
     started = true; gm(''); window.btStart(meta, b64);
   } catch (e) {
     $('gOut').style.display='block';
